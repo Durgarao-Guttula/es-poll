@@ -120,3 +120,38 @@ function renderLeaderboard(entries, { title = 'Top 10', highlightId = null } = {
   }).join('');
   return `<div class="leaderboard"><h3 class="lb-title">${escapeHtmlForChart(title)}</h3><ol class="lb-list">${rows}</ol></div>`;
 }
+
+// ---- Question countdown, shared by host, projector and phones. Each room:state calls
+// ---- syncTimer(); a ticker then fills every element marked data-timer (see timerHtml()).
+const quizTimer = { end: null, closed: false };
+
+function syncTimer(state) {
+  quizTimer.closed = !!state.closed && !state.isRevealed;
+  if (state.timer && !state.isRevealed) {
+    const end = Date.now() + state.timer.remainingMs;
+    // Snapshots arrive with every answer; ignore network jitter so the clock doesn't twitch.
+    if (quizTimer.end === null || Math.abs(end - quizTimer.end) > 700) quizTimer.end = end;
+  } else {
+    quizTimer.end = null;
+  }
+  paintTimers();
+}
+
+function timerHtml() {
+  return '<div class="q-timer" data-timer></div>';
+}
+
+function paintTimers() {
+  document.querySelectorAll('[data-timer]').forEach((el) => {
+    if (quizTimer.end === null) {
+      el.className = 'q-timer q-timer-up';
+      el.textContent = quizTimer.closed ? "⏰ Time's up" : '';
+      return;
+    }
+    const s = Math.ceil(Math.max(0, quizTimer.end - Date.now()) / 1000);
+    el.className = `q-timer${s <= 10 ? ' q-timer-low' : ''}`;
+    el.textContent = `⏱ ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  });
+}
+
+setInterval(paintTimers, 250);

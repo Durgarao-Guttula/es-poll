@@ -36,6 +36,19 @@
     <h3 id="questionText" style="margin-bottom:14px;"></h3>
     <p class="muted" id="answeredCount"></p>
 
+    <div class="timer-bar" id="timerBar">
+      <span class="muted" style="font-size:0.9rem;">Timer:</span>
+      <button class="secondary" data-secs="30">30 s</button>
+      <button class="secondary" data-secs="60">1 min</button>
+      <button class="secondary" data-secs="90">90 s</button>
+      <button class="secondary" data-secs="120">2 min</button>
+      <button class="secondary" data-secs="180">3 min</button>
+      <button class="secondary" id="timerAdd">+30 s</button>
+      <button class="secondary" id="timerStop">Stop timer</button>
+      <div class="q-timer" data-timer></div>
+      <span class="muted" id="timerNote" style="font-size:0.85rem; flex-basis:100%;"></span>
+    </div>
+
     <details class="live-box" id="liveBox">
       <summary>Peek at live results — only on this screen, not the projector</summary>
       <div id="liveArea"></div>
@@ -164,6 +177,12 @@ document.getElementById('textModList').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-id]');
   if (b) socket.emit('text:hide', { code, playerId: Number(b.dataset.id), hidden: b.dataset.hide === '1' });
 });
+document.getElementById('timerBar').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-secs]');
+  if (b) socket.emit('timer:start', { code, seconds: Number(b.dataset.secs) });
+});
+document.getElementById('timerAdd').addEventListener('click', () => socket.emit('timer:add', { code, seconds: 30 }));
+document.getElementById('timerStop').addEventListener('click', () => socket.emit('timer:stop', { code }));
 document.getElementById('discussBtn').addEventListener('click', () => {
   socket.emit('question:discuss', { code });
 });
@@ -185,6 +204,15 @@ document.getElementById('newQuizBtn').addEventListener('click', () => {
 socket.on('room:error', ({ message }) => alert(message));
 
 socket.on('room:state', (state) => {
+  syncTimer(state);
+  const running = !!state.timer && !state.isRevealed;
+  document.getElementById('timerBar').style.display = state.question && !state.isRevealed ? 'flex' : 'none';
+  document.getElementById('timerAdd').style.display = running ? '' : 'none';
+  document.getElementById('timerStop').style.display = running ? '' : 'none';
+  document.getElementById('timerNote').textContent = state.closed && !state.isRevealed
+    ? 'Answers are closed. Reveal when ready — or pick a time to reopen answers.'
+    : '';
+
   if (state.finished) {
     pickerCard.style.display = 'none';
     quizCard.style.display = 'none';

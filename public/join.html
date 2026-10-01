@@ -56,7 +56,7 @@ socket.on('room:error', ({ message }) => {
 socket.on('question:rejected', ({ message }) => {
   alert(message);
   // Give the buttons / input back so the student can try again.
-  if (lastState && lastState.question && !lastState.isRevealed && !answeredThisRound) {
+  if (lastState && lastState.question && !lastState.isRevealed && !lastState.closed && !answeredThisRound) {
     renderQuestion(lastState.question, lastState.session, lastState.round);
   }
 });
@@ -97,6 +97,7 @@ socket.on('quiz:yourFinalScore', ({ score, total, rank, of }) => {
 socket.on('room:state', (state) => {
   lastState = state;
   lastLeaderboard = state.leaderboard;
+  syncTimer(state);
   if (state.finished) return; // handled by quiz:yourFinalScore
   if (!state.session) {
     stage.innerHTML = `<div class="card center"><h1>Room ${code}</h1><p class="muted">Waiting for the quiz to start…</p></div>`;
@@ -129,6 +130,22 @@ socket.on('room:state', (state) => {
   }
 
   if (answeredThisRound) return; // waiting screen already shown by question:locked
+
+  // The countdown ran out before this student answered. If the teacher restarts the timer,
+  // `closed` goes false and the question comes back.
+  if (state.closed) {
+    if (renderedKey === `${key}:closed`) return;
+    renderedKey = `${key}:closed`;
+    stage.innerHTML = `
+      <div class="card center">
+        <h1>⏰ Time's up</h1>
+        <p class="muted">${myFirstVote
+          ? `Your first vote still counts: <strong>${escapeHtml(myFirstVote)}</strong>`
+          : 'Answers are closed for this question. The answer will appear on the main screen.'}</p>
+      </div>`;
+    return;
+  }
+
   if (renderedKey === key) return; // don't wipe the buttons on every classmate's answer
 
   renderQuestion(state.question, state.session, state.round);
@@ -146,6 +163,7 @@ function renderQuestion(question, session, round) {
     ${discuss}
     <div class="card">
       <p class="muted" style="margin:0 0 4px;">${escapeHtml(session.label)} · Question ${question.number} of ${session.total}${round === 2 ? ' · Revote' : ''}</p>
+      ${timerHtml()}
       <h2 style="text-align:left; margin-bottom:16px;">${escapeHtml(question.text)}</h2>
       <div id="opts"></div>
     </div>`;
@@ -226,6 +244,7 @@ function renderWaitingForReveal({ text, round, askConfidence, conf }) {
       <p class="muted">${round === 2 ? 'Your revote' : 'You chose'}: <strong>${escapeHtml(text || '')}</strong></p>
       ${confHtml}
       <p class="muted" style="margin-top:12px;">Waiting for the class to finish answering…</p>
+      ${timerHtml()}
     </div>`;
   stage.querySelectorAll('[data-conf]').forEach((b) => b.addEventListener('click', () => {
     stage.querySelectorAll('[data-conf]').forEach((x) => x.disabled = true);

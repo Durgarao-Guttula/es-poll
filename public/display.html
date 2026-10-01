@@ -12,6 +12,7 @@
   .vbar-chart { height: 280px; }
   .vbar-value { font-size: 1.05rem; }
   .vbar-label { font-size: 0.95rem; }
+  .q-timer { font-size: 2.2rem; padding: 6px 26px; margin-bottom: 14px; }
 </style>
 </head>
 <body>
@@ -44,6 +45,7 @@ socket.on('room:error', () => {
 });
 
 socket.on('room:state', (state) => {
+  syncTimer(state);
   if (state.finished) {
     const dist = state.scoreDistribution;
     const total = dist.length - 1;
@@ -78,6 +80,7 @@ socket.on('room:state', (state) => {
       stage.innerHTML = `
         <div class="card center">
           <p class="muted">${escapeHtml(state.session.label)} · Question ${q.number} of ${state.session.total} · not scored</p>
+          ${timerHtml()}
           <div class="question-text">${escapeHtml(q.text)}</div>
           <p class="muted" style="font-size:1.1rem;">${q.display === 'list' ? 'Type a sentence or two' : 'Type a word or short phrase'} on your phone</p>
           <p class="sub" style="font-size:1.3rem;">${state.totalAnswered} of ${state.playerCount} response(s) so far</p>
@@ -102,6 +105,7 @@ socket.on('room:state', (state) => {
           <h2 style="font-size:1.8rem;">💬 Turn to your neighbour</h2>
           <p style="margin:0; font-size:1.2rem;">Find someone who answered differently and convince each other — then vote again.</p>
         </div>
+        ${timerHtml()}
         <div class="question-text">${escapeHtml(q.text)}</div>
         ${numericHint}
         <p class="sub" style="font-size:1.3rem;">${state.totalAnswered} of ${state.firstRoundAnswered} have voted again</p>
@@ -113,6 +117,7 @@ socket.on('room:state', (state) => {
     stage.innerHTML = `
       <div class="card center">
         <p class="muted">${escapeHtml(state.session.label)} · Question ${q.number} of ${state.session.total}</p>
+        ${timerHtml()}
         <div class="question-text">${escapeHtml(q.text)}</div>
         ${numericHint}
         <p class="sub" style="font-size:1.3rem;">${state.totalAnswered} of ${state.playerCount} student(s) have answered</p>

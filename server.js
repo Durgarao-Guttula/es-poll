@@ -61,6 +61,8 @@ function createRoom() {
     hidden: new Set(), // playerIds whose text response the host has hidden
     firstAnswers: null, // round-1 answers, kept once a revote opens
     finalAnswers: null, // what was scored at reveal
+    timer: null, // { endsAt, durationMs, handle } while a countdown runs
+    closed: false, // true once a countdown has run out: no more answers this round
     players: new Map(), // playerId -> { id, token, score, timeMs, answered, lastRank }
     tokens: new Map(), // secret token -> player, so a refresh keeps the same ID
     finished: false,
@@ -79,7 +81,31 @@ function keyMatches(room, key) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+// ---- Countdown. Optional, started by the host per question (and again for a revote). When it
+// ---- runs out, answers close; the host still decides when to reveal.
+
+function clearTimer(room) {
+  if (room.timer) clearTimeout(room.timer.handle);
+  room.timer = null;
+  room.closed = false;
+}
+
+function setTimer(room, endsAt, durationMs) {
+  if (room.timer) clearTimeout(room.timer.handle);
+  room.closed = false;
+  room.timer = {
+    endsAt,
+    durationMs,
+    handle: setTimeout(() => {
+      room.timer = null;
+      room.closed = true;
+      broadcast(room);
+    }, Math.max(0, endsAt - Date.now())),
+  };
+}
+
 function openQuestion(room) {
+  clearTimer(room);
   room.isRevealed = false;
   room.round = 1;
   room.answers = new Map();
@@ -372,6 +398,9 @@ function roomSnapshot(room) {
         }
       : null,
     round: room.round,
+    // Time left rather than the end time, so a phone whose clock is off still counts down right.
+    timer: room.timer ? { remainingMs: Math.max(0, room.timer.endsAt - Date.now()), durationMs: room.timer.durationMs } : null,
+    closed: room.closed,
     isRevealed: room.isRevealed,
     reveal: room.isRevealed && q ? revealData(room, q) : null,
     totalAnswered: q ? room.answers.size : 0,
@@ -532,6 +561,10 @@ io.on('connection', (socket) => {
       socket.emit('question:locked', lockedPayload(room, q, room.answers.get(playerId)));
       return;
     }
+    if (room.closed) {
+      socket.emit('question:rejected', { message: 'Time\'s up — answers are closed for this question.' });
+      return;
+    }
     const value = parseAnswer(q, answer);
     if (value === null) {
       socket.emit('question:rejected', {
@@ -568,12 +601,38 @@ io.on('connection', (socket) => {
     broadcast(room);
   });
 
+  // Start (or restart, which reopens answers after time's up) a countdown of `seconds`.
+  socket.on('timer:start', ({ code, seconds }) => {
+    const room = getRoom(code);
+    const s = Number(seconds);
+    if (!isHost(room) || !currentQuestion(room) || room.isRevealed || !(s >= 5 && s <= 900)) return;
+    setTimer(room, Date.now() + s * 1000, s * 1000);
+    broadcast(room);
+  });
+
+  socket.on('timer:add', ({ code, seconds }) => {
+    const room = getRoom(code);
+    const s = Number(seconds);
+    if (!isHost(room) || !room.timer || room.isRevealed || !(s >= 5 && s <= 300)) return;
+    setTimer(room, room.timer.endsAt + s * 1000, room.timer.durationMs + s * 1000);
+    broadcast(room);
+  });
+
+  // Drop the countdown and leave answers open.
+  socket.on('timer:stop', ({ code }) => {
+    const room = getRoom(code);
+    if (!isHost(room) || room.isRevealed) return;
+    clearTimer(room);
+    broadcast(room);
+  });
+
   // Peer instruction: freeze the first vote, let students discuss, collect a second vote.
   socket.on('question:discuss', ({ code }) => {
     const room = getRoom(code);
     const q = room && currentQuestion(room);
     if (!isHost(room) || !q || isText(q) || room.isRevealed || room.round !== 1) return;
 
+    clearTimer(room); // the revote gets its own countdown if the host wants one
     room.firstAnswers = room.answers;
     room.answers = new Map();
     room.round = 2;
@@ -588,6 +647,7 @@ io.on('connection', (socket) => {
     const room = getRoom(code);
     const q = room && currentQuestion(room);
     if (!isHost(room) || !q || room.isRevealed) return;
+    clearTimer(room);
 
     // Text questions are unscored: just open the responses to the projector.
     if (isText(q)) {

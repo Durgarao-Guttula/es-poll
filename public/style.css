@@ -308,6 +308,17 @@ label { font-size: 0.85rem; color: var(--muted); display: block; margin-bottom: 
 .conf-bad { border-color: var(--bad); background: rgba(248,113,113,0.15); }
 .conf-panel { margin-top: 16px; }
 
+.q-timer {
+  display: inline-block; font-weight: 800; font-variant-numeric: tabular-nums; font-size: 1.1rem;
+  padding: 4px 14px; border-radius: 999px; background: var(--panel-light); color: var(--accent);
+}
+.q-timer:empty { display: none; }
+.card > .q-timer { margin: 6px 0 10px; }
+.q-timer-low, .q-timer-up { background: rgba(248,113,113,0.18); color: var(--bad); }
+.timer-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 12px; }
+.timer-bar button { padding: 6px 12px; font-size: 0.85rem; }
+.timer-bar .q-timer { margin-left: 6px; }
+
 .word-cloud {
   display: flex; flex-wrap: wrap; justify-content: center; align-items: center;
   gap: 6px 18px; padding: 18px 8px; min-height: 160px; line-height: 1.15;

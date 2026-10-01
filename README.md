@@ -37,6 +37,14 @@ phone. After every reveal, and again at the end, the projector, host panel and p
 ▲/▼ arrows show movement since the previous question, and each student sees their own rank.
 The ID survives a page refresh or dropped WiFi on the same phone/browser.
 
+### Timer (optional)
+
+While a question is open, the host panel's **Timer** row starts a countdown (30 s, 1, 1½, 2 or
+3 min) shown on the projector and every phone; **+30 s** and **Stop timer** appear while it runs.
+At zero, answers close — late taps get "Time's up" — but nothing is revealed: you still click
+**Reveal** (or **Discuss & revote**, which can have its own timer). Picking a time again after it
+has run out reopens answers. Without a timer, questions stay open until you reveal, as before.
+
 ### Discuss & revote (peer instruction)
 
 On any question, instead of revealing straight away, click **Discuss & revote** on the host panel.
