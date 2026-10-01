@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Host — ES Concept Check</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="wrap wide">
+  <div class="brand-bar"><img src="/logo.png" alt="RV University" class="brand-logo" /></div>
+
+  <div class="card row" style="align-items:center;">
+    <div>
+      <p class="sub" style="margin-bottom:2px;">Room code</p>
+      <div class="room-code" id="roomCode">----</div>
+    </div>
+    <div class="center">
+      <a id="displayLink" href="#" target="_blank"><button class="secondary">Open projector display ↗</button></a>
+    </div>
+  </div>
+
+  <div id="pickerCard" class="card">
+    <h2>Pick a session</h2>
+    <p class="sub" style="margin-top:-6px;">Students see one question at a time and get instant feedback.</p>
+    <div id="sessionList"><p class="muted">Loading sessions…</p></div>
+  </div>
+
+  <div id="quizCard" class="card" style="display:none;">
+    <div class="row" style="align-items:center; justify-content:space-between;">
+      <h2 id="quizTitle" style="margin:0;"></h2>
+      <button class="secondary" id="endQuizBtn">End quiz</button>
+    </div>
+    <div class="progress-track"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+    <p class="muted" id="questionCounter"></p>
+    <h3 id="questionText" style="margin-bottom:14px;"></h3>
+    <p class="muted" id="answeredCount"></p>
+
+    <details class="live-box" id="liveBox">
+      <summary>Peek at live results — only on this screen, not the projector</summary>
+      <div id="liveArea"></div>
+      <p class="muted" style="font-size:0.85rem; margin:6px 0 0;">
+        Rule of thumb: <strong>≥70%</strong> correct → reveal ·
+        <strong>30–70%</strong> → discuss &amp; revote ·
+        <strong>&lt;30%</strong> → re-teach before discussing.
+      </p>
+    </details>
+
+    <div id="textMod" class="live-box" style="display:none;">
+      <p style="margin:0 0 6px;"><strong>Responses</strong> <span class="muted" style="font-size:0.85rem;">— only you see these until you show them. Hide anything that shouldn't go on the projector.</span></p>
+      <div id="textModList"></div>
+    </div>
+
+    <div class="reveal-grid">
+      <div>
+        <div id="resultsArea"></div>
+        <div id="explanationArea" class="muted" style="margin-top:6px; line-height:1.5;"></div>
+      </div>
+      <div id="leaderboardArea"></div>
+    </div>
+
+    <div class="row" style="margin-top:16px;">
+      <button class="big secondary" id="discussBtn">💬 Discuss &amp; revote</button>
+      <button class="big" id="revealBtn">Reveal answer</button>
+      <button class="big" id="nextBtn" style="display:none;">Next question</button>
+    </div>
+  </div>
+
+  <div id="finishedCard" class="card" style="display:none;">
+    <h2>Session complete 🎉</h2>
+    <p class="muted" id="finishedSummary"></p>
+    <div class="reveal-grid">
+      <div id="scoreDistArea" class="score-dist-chart"></div>
+      <div id="finalLeaderboardArea"></div>
+    </div>
+    <button class="big" id="newQuizBtn" style="margin-top:16px;">Start another session</button>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/charts.js"></script>
+<script>
+const code = window.location.pathname.split('/').pop().toUpperCase();
+document.getElementById('roomCode').textContent = code;
+document.getElementById('displayLink').href = `/display/${code}`;
+
+// The host key proves this browser created the room. It arrives once in the URL (#k=…), is kept
+// in this browser, and taken out of the address bar so it isn't shared by accident.
+const keyStore = `es-host-${code}`;
+let hostKey = null;
+const fromUrl = window.location.hash.match(/k=([0-9a-f]+)/);
+if (fromUrl) {
+  hostKey = fromUrl[1];
+  try {
+    localStorage.setItem(keyStore, hostKey);
+    history.replaceState(null, '', window.location.pathname);
+  } catch {} // no storage (private window): leave it in the URL so a refresh still works
+} else {
+  try { hostKey = localStorage.getItem(keyStore); } catch {}
+}
+
+const socket = io();
+socket.on('connect', () => {
+  socket.emit('room:join', { code });
+  socket.emit('host:watch', { code, key: hostKey });
+});
+
+socket.on('host:denied', () => {
+  socket.disconnect();
+  document.querySelector('.wrap').innerHTML = `
+    <div class="brand-bar"><img src="/logo.png" alt="RV University" class="brand-logo" /></div>
+    <div class="card center">
+      <h1>Teacher page only</h1>
+      <p class="muted">Room ${escapeHtml(code)} can only be run from the browser that started it.</p>
+      <p class="muted">Students: <a href="/join/${encodeURIComponent(code)}">join the quiz here</a>.
+        Teachers: <a href="/">start a new session</a>.</p>
+    </div>`;
+});
+
+socket.on('host:live', (live) => {
+  const el = document.getElementById('liveArea');
+  if (live && live.kind === 'text') {
+    document.getElementById('textModList').innerHTML = live.responses.length
+      ? live.responses.slice().reverse().map((r) => `
+          <div class="mod-row${r.hidden ? ' is-hidden' : ''}">
+            <span class="muted">#${r.id}</span>
+            <span class="mod-text">${escapeHtml(r.text)}</span>
+            <button class="secondary" data-id="${r.id}" data-hide="${r.hidden ? '0' : '1'}">${r.hidden ? 'Show' : 'Hide'}</button>
+          </div>`).join('')
+      : '<p class="muted">No responses yet.</p>';
+    return;
+  }
+  if (!live) { el.innerHTML = ''; return; }
+  const total = live.counts.reduce((a, b) => a + b, 0);
+  const head = total
+    ? `<p style="margin:10px 0 0;"><strong>${live.pct}%</strong> correct so far (${total} answer${total === 1 ? '' : 's'})${live.round === 2 && live.pctFirst !== null ? ` · first vote was ${live.pctFirst}%` : ''}</p>`
+    : '<p class="muted" style="margin:10px 0 0;">No answers yet.</p>';
+  el.innerHTML = head + (total ? renderVerticalBarChart(live.labels, live.counts, live.correct) : '');
+});
+
+const pickerCard = document.getElementById('pickerCard');
+const quizCard = document.getElementById('quizCard');
+const finishedCard = document.getElementById('finishedCard');
+
+fetch('/api/sessions').then(r => r.json()).then(sessionsList => {
+  const el = document.getElementById('sessionList');
+  el.innerHTML = '';
+  sessionsList.forEach((s) => {
+    const btn = document.createElement('button');
+    btn.className = 'session-card';
+    btn.innerHTML = `
+      <div class="session-num">${escapeHtml(s.label).toUpperCase()}</div>
+      <div class="session-title">${escapeHtml(s.title)}</div>
+      <div class="session-count">${s.count} questions</div>
+    `;
+    btn.addEventListener('click', () => {
+      socket.emit('quiz:start', { code, sessionId: s.id });
+    });
+    el.appendChild(btn);
+  });
+});
+
+document.getElementById('textModList').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-id]');
+  if (b) socket.emit('text:hide', { code, playerId: Number(b.dataset.id), hidden: b.dataset.hide === '1' });
+});
+document.getElementById('discussBtn').addEventListener('click', () => {
+  socket.emit('question:discuss', { code });
+});
+document.getElementById('revealBtn').addEventListener('click', () => {
+  socket.emit('question:reveal', { code });
+});
+document.getElementById('nextBtn').addEventListener('click', () => {
+  socket.emit('quiz:next', { code });
+});
+document.getElementById('endQuizBtn').addEventListener('click', () => {
+  if (confirm('End this quiz and go back to the session picker?')) {
+    socket.emit('quiz:clear', { code });
+  }
+});
+document.getElementById('newQuizBtn').addEventListener('click', () => {
+  socket.emit('quiz:clear', { code });
+});
+
+socket.on('room:error', ({ message }) => alert(message));
+
+socket.on('room:state', (state) => {
+  if (state.finished) {
+    pickerCard.style.display = 'none';
+    quizCard.style.display = 'none';
+    finishedCard.style.display = 'block';
+
+    const dist = state.scoreDistribution;
+    const totalStudents = dist.reduce((a, b) => a + b, 0);
+    const total = dist.length - 1;
+    const labels = dist.map((_, i) => `${i}/${total}`);
+    document.getElementById('finishedSummary').textContent = totalStudents
+      ? `${totalStudents} student(s) finished. Here's how the class did:`
+      : 'No submissions came in for this session.';
+    document.getElementById('scoreDistArea').innerHTML = totalStudents
+      ? renderVerticalBarChart(labels, dist)
+      : '';
+    document.getElementById('finalLeaderboardArea').innerHTML = renderLeaderboard(state.leaderboard, { title: 'Final top 10' });
+    return;
+  }
+
+  if (!state.session) {
+    pickerCard.style.display = 'block';
+    quizCard.style.display = 'none';
+    finishedCard.style.display = 'none';
+    return;
+  }
+
+  pickerCard.style.display = 'none';
+  quizCard.style.display = 'block';
+  finishedCard.style.display = 'none';
+
+  document.getElementById('quizTitle').textContent = `${state.session.label}: ${state.session.title}`;
+  document.getElementById('progressFill').style.width = `${(state.question.number / state.session.total) * 100}%`;
+  document.getElementById('questionCounter').textContent = `Question ${state.question.number} of ${state.session.total}`;
+  const q = state.question;
+  const isText = q.type === 'text';
+  document.getElementById('questionText').textContent =
+    q.type === 'numeric' ? `${q.text}  [number answer${q.unit ? ', in ' + q.unit : ''}]`
+    : isText ? `${q.text}  [${q.display === 'list' ? 'short text' : 'word cloud'} · not scored]`
+    : q.text;
+  document.getElementById('answeredCount').textContent =
+    isText ? `${state.totalAnswered} of ${state.playerCount} joined student(s) responded`
+    : state.round === 2
+      ? `Revote: ${state.totalAnswered} voted again (${state.firstRoundAnswered} voted first time, ${state.playerCount} joined). Students who don't revote keep their first answer.`
+      : `${state.totalAnswered} of ${state.playerCount} joined student(s) answered`;
+  document.getElementById('liveBox').style.display = state.isRevealed || isText ? 'none' : 'block';
+  document.getElementById('textMod').style.display = isText ? 'block' : 'none';
+  document.querySelector('#quizCard .reveal-grid').style.gridTemplateColumns = isText ? '1fr' : '';
+  document.getElementById('discussBtn').style.display = !state.isRevealed && !isText && state.round === 1 ? 'block' : 'none';
+  document.getElementById('revealBtn').textContent = isText ? 'Show responses on projector' : 'Reveal answer';
+  document.getElementById('leaderboardArea').innerHTML = state.isRevealed && !isText
+    ? renderLeaderboard(state.leaderboard, { title: `Top 10 after Q${state.question.number}` })
+    : '';
+
+  const revealBtn = document.getElementById('revealBtn');
+  const nextBtn = document.getElementById('nextBtn');
+  const resultsArea = document.getElementById('resultsArea');
+  const explanationArea = document.getElementById('explanationArea');
+
+  if (!state.isRevealed) {
+    revealBtn.style.display = 'block';
+    nextBtn.style.display = 'none';
+    resultsArea.innerHTML = '';
+    explanationArea.textContent = '';
+  } else {
+    revealBtn.style.display = 'none';
+    nextBtn.style.display = 'block';
+    nextBtn.textContent = state.question.number >= state.session.total ? 'Finish session' : 'Next question';
+    if (state.reveal.kind === 'text') {
+      resultsArea.innerHTML = renderTextReveal(state.reveal);
+      explanationArea.textContent = state.reveal.explanation ? `Model answer: ${state.reveal.explanation}` : '';
+    } else {
+      resultsArea.innerHTML = renderReveal(state.reveal) + (state.reveal.confidence ? renderConfidence(state.reveal.confidence) : '');
+      explanationArea.textContent = state.reveal.explanation;
+    }
+  }
+});
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+</script>
+</body>
+</html>

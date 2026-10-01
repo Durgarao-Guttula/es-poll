@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Join — ES Concept Check</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <div class="brand-bar"><img src="/logo.png" alt="RV University" class="brand-logo" /></div>
+  <div class="player-bar"><span class="player-tag" id="playerTag" style="display:none;"></span></div>
+  <div id="stage"><div class="card center"><h1>Connecting…</h1></div></div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/charts.js"></script>
+<script>
+const code = window.location.pathname.split('/').pop().toUpperCase();
+const tokenKey = `es-player-${code}`;
+function loadToken() { try { return localStorage.getItem(tokenKey); } catch { return null; } }
+function saveToken(t) { try { localStorage.setItem(tokenKey, t); } catch {} }
+
+const socket = io();
+// Re-sent on every (re)connect so a dropped connection keeps the same ID.
+socket.on('connect', () => socket.emit('player:join', { code, token: loadToken() }));
+
+const stage = document.getElementById('stage');
+let lastQIndex = null;
+let lastKey = null;       // question + round, e.g. "3:2"
+let renderedKey = null;   // which question/round the answer buttons are showing
+let answeredThisRound = false;
+let myFirstVote = null;   // text of this student's round-1 answer, once a revote opens
+let myScore = 0;
+let myId = null;
+let lastLeaderboard = null;
+let lastState = null;
+
+const ENCOURAGE_CORRECT = ['Nice work!', 'Exactly right!', 'You\'ve got it!', 'Great instinct!', 'Spot on!'];
+const ENCOURAGE_WRONG = ['Good try — here\'s the idea:', 'Close! Here\'s why:', 'Common mix-up — here\'s the fix:', 'Not quite, but this is worth remembering:'];
+
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+socket.on('player:assigned', ({ id, token }) => {
+  myId = id;
+  saveToken(token);
+  const tag = document.getElementById('playerTag');
+  tag.textContent = `You are #${id}`;
+  tag.style.display = 'inline-block';
+});
+
+socket.on('room:error', ({ message }) => {
+  stage.innerHTML = `<div class="card center"><h1>Oops</h1><p class="muted">${escapeHtml(message)}</p></div>`;
+});
+
+socket.on('question:rejected', ({ message }) => {
+  alert(message);
+  // Give the buttons / input back so the student can try again.
+  if (lastState && lastState.question && !lastState.isRevealed && !answeredThisRound) {
+    renderQuestion(lastState.question, lastState.session, lastState.round);
+  }
+});
+
+socket.on('question:firstVote', ({ text }) => {
+  myFirstVote = text;
+  const el = document.getElementById('firstVoteLine');
+  if (el) el.innerHTML = `Your first vote: <strong>${escapeHtml(text)}</strong>`;
+});
+
+socket.on('question:locked', (locked) => {
+  answeredThisRound = true;
+  renderWaitingForReveal(locked);
+});
+
+socket.on('question:textDone', ({ yourAnswer, explanation }) => {
+  answeredThisRound = true;
+  renderedKey = null;
+  stage.innerHTML = `
+    <div class="card center">
+      <h1>🙌 Thanks!</h1>
+      <p class="muted">You said: <strong>${escapeHtml(yourAnswer)}</strong></p>
+      <p class="muted">The class's answers are on the main screen. This one isn't scored.</p>
+    </div>
+    ${explanation ? `<div class="feedback-banner correct"><div class="explanation" style="margin-top:0;">${escapeHtml(explanation)}</div></div>` : ''}`;
+});
+
+socket.on('question:yourResult', (r) => {
+  answeredThisRound = true;
+  myScore = r.score;
+  renderFeedback(r);
+});
+
+socket.on('quiz:yourFinalScore', ({ score, total, rank, of }) => {
+  renderFinalScore(score, total, rank, of);
+});
+
+socket.on('room:state', (state) => {
+  lastState = state;
+  lastLeaderboard = state.leaderboard;
+  if (state.finished) return; // handled by quiz:yourFinalScore
+  if (!state.session) {
+    stage.innerHTML = `<div class="card center"><h1>Room ${code}</h1><p class="muted">Waiting for the quiz to start…</p></div>`;
+    lastQIndex = null;
+    lastKey = null;
+    renderedKey = null;
+    return;
+  }
+
+  if (state.qIndex !== lastQIndex) {
+    lastQIndex = state.qIndex;
+    myFirstVote = null;
+  }
+  const key = `${state.qIndex}:${state.round}`;
+  if (key !== lastKey) {
+    lastKey = key;
+    answeredThisRound = false;
+  }
+
+  if (state.isRevealed) {
+    // A first vote still counts if the student skipped the revote — their result is on its way.
+    if (!answeredThisRound && !myFirstVote) {
+      renderedKey = null;
+      stage.innerHTML = state.question.type === 'text'
+        ? `<div class="card center"><h1>Responses closed</h1><p class="muted">The class's answers are on the main screen.</p></div>`
+        : `<div class="card center"><h1>Time's up</h1><p class="muted">You didn't answer this one — the correct answer is on the main screen.</p></div>
+           <div class="card">${renderLeaderboard(lastLeaderboard, { highlightId: myId })}</div>`;
+    }
+    return;
+  }
+
+  if (answeredThisRound) return; // waiting screen already shown by question:locked
+  if (renderedKey === key) return; // don't wipe the buttons on every classmate's answer
+
+  renderQuestion(state.question, state.session, state.round);
+});
+
+function renderQuestion(question, session, round) {
+  renderedKey = `${lastQIndex}:${round}`;
+  const discuss = round === 2 ? `
+    <div class="discuss-banner">
+      <h2>💬 Discuss, then vote again</h2>
+      <p class="muted" style="margin:0;">Convince a neighbour — ideally someone who answered differently.</p>
+      <p id="firstVoteLine" style="margin:8px 0 0;">${myFirstVote ? `Your first vote: <strong>${escapeHtml(myFirstVote)}</strong>` : ''}</p>
+    </div>` : '';
+  stage.innerHTML = `
+    ${discuss}
+    <div class="card">
+      <p class="muted" style="margin:0 0 4px;">${escapeHtml(session.label)} · Question ${question.number} of ${session.total}${round === 2 ? ' · Revote' : ''}</p>
+      <h2 style="text-align:left; margin-bottom:16px;">${escapeHtml(question.text)}</h2>
+      <div id="opts"></div>
+    </div>`;
+  const optsEl = document.getElementById('opts');
+
+  if (question.type === 'text') {
+    const long = question.display === 'list';
+    optsEl.innerHTML = `
+      ${long
+        ? `<textarea class="text-answer" id="textInput" maxlength="${question.maxLength}" placeholder="Type your answer"></textarea>`
+        : `<input type="text" id="textInput" maxlength="${question.maxLength}" autocomplete="off" placeholder="A word or short phrase" style="font-size:1.2rem;" />`}
+      <p class="muted" style="font-size:0.8rem; margin:4px 0 12px;"><span id="textCount">0</span> / ${question.maxLength} characters · not scored</p>
+      <button class="big" id="textSubmit">Send</button>`;
+    const input = document.getElementById('textInput');
+    const btn = document.getElementById('textSubmit');
+    input.addEventListener('input', () => { document.getElementById('textCount').textContent = input.value.length; });
+    const submit = () => {
+      if (!input.value.trim()) { input.focus(); return; }
+      input.disabled = true;
+      btn.disabled = true;
+      socket.emit('question:answer', { code, answer: input.value });
+    };
+    btn.addEventListener('click', submit);
+    if (!long) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    return;
+  }
+
+  if (question.type === 'numeric') {
+    optsEl.innerHTML = `
+      <div class="numeric-row">
+        <input type="text" id="numInput" inputmode="decimal" autocomplete="off" placeholder="Your answer" />
+        ${question.unit ? `<span class="numeric-unit">${escapeHtml(question.unit)}</span>` : ''}
+      </div>
+      <p class="muted" style="font-size:0.8rem; margin:6px 0 12px;">Numbers only. For powers of ten type e.g. 2.5e4 for 2.5 × 10⁴.</p>
+      <button class="big" id="numSubmit">Submit answer</button>`;
+    const input = document.getElementById('numInput');
+    const btn = document.getElementById('numSubmit');
+    const submit = () => {
+      if (!input.value.trim()) { input.focus(); return; }
+      input.disabled = true;
+      btn.disabled = true;
+      socket.emit('question:answer', { code, answer: input.value });
+    };
+    btn.addEventListener('click', submit);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    return;
+  }
+
+  question.options.forEach((opt, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'answer-btn';
+    btn.textContent = opt;
+    btn.addEventListener('click', () => {
+      Array.from(optsEl.children).forEach(b => b.disabled = true);
+      btn.classList.add('chosen');
+      socket.emit('question:answer', { code, answer: i });
+    });
+    optsEl.appendChild(btn);
+  });
+}
+
+function renderWaitingForReveal({ text, round, askConfidence, conf }) {
+  renderedKey = null;
+  let confHtml = '';
+  if (askConfidence && !conf) {
+    confHtml = `
+      <div style="margin-top:14px;">
+        <p style="margin:0; font-weight:600;">How sure are you?</p>
+        <div class="conf-row">${[1, 2, 3, 4, 5].map((n) => `<button data-conf="${n}">${n}</button>`).join('')}</div>
+        <div class="conf-scale"><span>1 = guessing</span><span>5 = certain</span></div>
+      </div>`;
+  } else if (askConfidence) {
+    confHtml = `<p class="muted" style="margin-top:10px;">Confidence: <strong>${conf} / 5</strong> — thanks.</p>`;
+  }
+  stage.innerHTML = `
+    <div class="card center">
+      <h1>✓ Locked in</h1>
+      <p class="muted">${round === 2 ? 'Your revote' : 'You chose'}: <strong>${escapeHtml(text || '')}</strong></p>
+      ${confHtml}
+      <p class="muted" style="margin-top:12px;">Waiting for the class to finish answering…</p>
+    </div>`;
+  stage.querySelectorAll('[data-conf]').forEach((b) => b.addEventListener('click', () => {
+    stage.querySelectorAll('[data-conf]').forEach((x) => x.disabled = true);
+    socket.emit('question:confidence', { code, level: Number(b.dataset.conf) });
+  }));
+}
+
+function renderFeedback({ correct, yourAnswer, correctAnswer, explanation, rank, of }) {
+  renderedKey = null;
+  stage.innerHTML = `
+    <div class="feedback-banner ${correct ? 'correct' : 'wrong'}">
+      <h1>${correct ? '✓ ' + pick(ENCOURAGE_CORRECT) : '✗ ' + pick(ENCOURAGE_WRONG)}</h1>
+      <p style="margin:6px 0 0;">Your answer: <strong>${escapeHtml(yourAnswer)}</strong>${correct ? '' : `<br>Correct answer: <strong>${escapeHtml(correctAnswer)}</strong>`}</p>
+      <div class="explanation">${escapeHtml(explanation)}</div>
+    </div>
+    <div class="card center">
+      <span class="score-badge">Score so far: ${myScore}</span>
+      ${rank ? `<span class="score-badge">Rank ${rank} of ${of}</span>` : ''}
+      <p class="muted" style="margin-top:12px;">Waiting for the next question…</p>
+    </div>
+    <div class="card">${renderLeaderboard(lastLeaderboard, { highlightId: myId })}</div>`;
+}
+
+function renderFinalScore(score, total, rank, of) {
+  renderedKey = null;
+  let headline, sub;
+  const pct = score / total;
+  if (pct === 1) { headline = '🏆 Perfect score!'; sub = 'You\'ve completely nailed this topic.'; }
+  else if (pct >= 0.75) { headline = '🎉 Great job!'; sub = 'Strong grasp of the material — just a small gap to close.'; }
+  else if (pct >= 0.5) { headline = '👍 Good effort!'; sub = 'You\'re halfway there — a quick review of today\'s recap will lock it in.'; }
+  else { headline = '💪 Keep going!'; sub = 'This session\'s ideas take practice — revisit the examples and you\'ll get there.'; }
+
+  stage.innerHTML = `
+    <div class="card center">
+      <h1>${headline}</h1>
+      <p class="sub">${sub}</p>
+      <div class="room-code" style="margin:16px 0;">${score} / ${total}</div>
+      ${rank ? `<p class="sub" style="font-size:1.15rem;">You finished <strong>#${rank}</strong> of ${of}${rank <= 10 ? ' — top 10! 🌟' : ''}</p>` : ''}
+      <p class="muted">Thanks for playing along!</p>
+    </div>
+    <div class="card">${renderLeaderboard(lastLeaderboard, { title: 'Final top 10', highlightId: myId })}</div>`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+</script>
+</body>
+</html>

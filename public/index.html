@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ES Concept Check</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <div class="brand-bar"><img src="/logo.png" alt="RV University" class="brand-logo" /></div>
+
+  <div class="card center">
+    <h1>ES Concept Check</h1>
+    <p class="sub">Quick quizzes for CS1806 Exploring Science sessions — answer, learn instantly, improve.</p>
+    <button class="big" id="createBtn">Start a new session</button>
+  </div>
+
+  <div class="card">
+    <h2>Already have a room code?</h2>
+    <div class="row">
+      <input type="text" id="joinCode" placeholder="ROOM CODE" maxlength="5" style="text-transform:uppercase" />
+      <button id="joinAsStudent" class="secondary">Join as student</button>
+    </div>
+  </div>
+</div>
+
+<script>
+document.getElementById('createBtn').addEventListener('click', async () => {
+  const res = await fetch('/api/rooms', { method: 'POST' });
+  const { code, hostKey } = await res.json();
+  // After # so it never reaches the server's logs; the host page moves it into this browser's storage.
+  window.location.href = `/host/${code}#k=${hostKey}`;
+});
+
+document.getElementById('joinAsStudent').addEventListener('click', () => {
+  const code = document.getElementById('joinCode').value.trim().toUpperCase();
+  if (code) window.location.href = `/join/${code}`;
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Display — ES Concept Check</title>
+<link rel="stylesheet" href="/style.css" />
+<style>
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .stage { width: 100%; max-width: 1200px; padding: 20px; }
+  .question-text { font-size: 1.9rem; font-weight: 800; margin-bottom: 20px; text-align: center; }
+  .vbar-chart { height: 280px; }
+  .vbar-value { font-size: 1.05rem; }
+  .vbar-label { font-size: 0.95rem; }
+</style>
+</head>
+<body>
+<div class="brand-bar"><img src="/logo.png" alt="RV University" class="brand-logo brand-logo-lg" /></div>
+<div class="stage" id="stage"><div class="card center"><h1>Loading…</h1></div></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/charts.js"></script>
+<script>
+const code = window.location.pathname.split('/').pop().toUpperCase();
+const socket = io();
+socket.emit('room:join', { code });
+
+const stage = document.getElementById('stage');
+
+async function showJoinScreen() {
+  const res = await fetch(`/api/rooms/${code}/qrcode`);
+  const { dataUrl, joinUrl } = await res.json();
+  stage.innerHTML = `
+    <div class="card center">
+      <p class="sub">Scan to join</p>
+      <div class="room-code" style="margin-bottom:16px;">${code}</div>
+      <div class="qr-box"><img src="${dataUrl}" alt="QR code to join" /></div>
+      <p class="muted" style="margin-top:16px; word-break:break-all;">${joinUrl}</p>
+    </div>`;
+}
+
+socket.on('room:error', () => {
+  stage.innerHTML = `<div class="card center"><h1>Room not found</h1></div>`;
+});
+
+socket.on('room:state', (state) => {
+  if (state.finished) {
+    const dist = state.scoreDistribution;
+    const total = dist.length - 1;
+    const totalStudents = dist.reduce((a, b) => a + b, 0);
+    const labels = dist.map((_, i) => `${i}/${total}`);
+    stage.innerHTML = `
+      <div class="card">
+        <div class="center">
+          <h1>Session complete 🎉</h1>
+          <p class="muted">${totalStudents} student(s) finished — here's how the class did</p>
+        </div>
+        <div class="reveal-grid">
+          <div>${totalStudents ? renderVerticalBarChart(labels, dist) : ''}</div>
+          ${renderLeaderboard(state.leaderboard, { title: '🏆 Final top 10' })}
+        </div>
+      </div>`;
+    return;
+  }
+
+  if (!state.session) {
+    showJoinScreen();
+    return;
+  }
+
+  const q = state.question;
+  const numericHint = q.type === 'numeric'
+    ? `<p class="muted" style="font-size:1.1rem;">Type your answer as a number${q.unit ? ` in <strong>${escapeHtml(q.unit)}</strong>` : ''}</p>`
+    : '';
+
+  if (q.type === 'text') {
+    if (!state.isRevealed) {
+      stage.innerHTML = `
+        <div class="card center">
+          <p class="muted">${escapeHtml(state.session.label)} · Question ${q.number} of ${state.session.total} · not scored</p>
+          <div class="question-text">${escapeHtml(q.text)}</div>
+          <p class="muted" style="font-size:1.1rem;">${q.display === 'list' ? 'Type a sentence or two' : 'Type a word or short phrase'} on your phone</p>
+          <p class="sub" style="font-size:1.3rem;">${state.totalAnswered} of ${state.playerCount} response(s) so far</p>
+        </div>`;
+    } else {
+      stage.innerHTML = `
+        <div class="card">
+          <p class="muted center">${escapeHtml(state.session.label)} · Question ${q.number} of ${state.session.total}</p>
+          <div class="question-text">${escapeHtml(q.text)}</div>
+          ${renderTextReveal(state.reveal)}
+          ${state.reveal.explanation ? `<p class="muted center" style="margin-top:14px; line-height:1.5;"><strong>Model answer:</strong> ${escapeHtml(state.reveal.explanation)}</p>` : ''}
+        </div>`;
+    }
+    return;
+  }
+
+  if (!state.isRevealed && state.round === 2) {
+    stage.innerHTML = `
+      <div class="card center">
+        <p class="muted">${escapeHtml(state.session.label)} · Question ${q.number} of ${state.session.total}</p>
+        <div class="discuss-banner">
+          <h2 style="font-size:1.8rem;">💬 Turn to your neighbour</h2>
+          <p style="margin:0; font-size:1.2rem;">Find someone who answered differently and convince each other — then vote again.</p>
+        </div>
+        <div class="question-text">${escapeHtml(q.text)}</div>
+        ${numericHint}
+        <p class="sub" style="font-size:1.3rem;">${state.totalAnswered} of ${state.firstRoundAnswered} have voted again</p>
+      </div>`;
+    return;
+  }
+
+  if (!state.isRevealed) {
+    stage.innerHTML = `
+      <div class="card center">
+        <p class="muted">${escapeHtml(state.session.label)} · Question ${q.number} of ${state.session.total}</p>
+        <div class="question-text">${escapeHtml(q.text)}</div>
+        ${numericHint}
+        <p class="sub" style="font-size:1.3rem;">${state.totalAnswered} of ${state.playerCount} student(s) have answered</p>
+      </div>`;
+    return;
+  }
+
+  stage.innerHTML = `
+    <div class="card">
+      <p class="muted center">${escapeHtml(state.session.label)} · Question ${state.question.number} of ${state.session.total}</p>
+      <div class="question-text">${escapeHtml(state.question.text)}</div>
+      <div class="reveal-grid">
+        <div>
+          ${renderReveal(state.reveal)}
+          <p class="muted center" style="margin-top:14px; line-height:1.5;">${escapeHtml(state.reveal.explanation)}</p>
+        </div>
+        ${renderLeaderboard(state.leaderboard, { title: `Top 10 after Q${state.question.number}` })}
+      </div>
+    </div>`;
+});
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+</script>
+</body>
+</html>
